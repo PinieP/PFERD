@@ -1,8 +1,13 @@
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import PurePath
-from typing import List, Optional
+from typing import Dict, List, Optional
+from urllib.parse import urljoin
 
+import aiohttp
+from aiohttp.client import ClientSession
+
+from PFERD.auth.authenticator import Authenticator
 from PFERD.output_dir import FileSink
 from ..logging import ProgressBar, log
 
@@ -37,8 +42,10 @@ class InfomarkCrawler(HttpCrawler):
             name: str,
             section: InfomarkCrawlerSection,
             config: Config,
+            authenticators: Dict[str, Authenticator]
     ):
         super().__init__(name, section, config)
+        self._auth = section.auth(authenticators)
         self._url = section.target()
 
     async def _fetch_sheets(self) -> List[InfomarkFile]:
@@ -46,11 +53,13 @@ class InfomarkCrawler(HttpCrawler):
         files = []
         async with self.session.get(url) as resp:
             for sheet in await resp.json():
-                files.append(InfomarkFile(sheet["name"], f"{url}/{sheet["id"]}/file"))
+                log.print(f"{sheet}")
+                files.append(InfomarkFile(f"{sheet["name"]}.zip", f"{url}/{sheet["id"]}/file"))
 
         return files
 
     async def _crawl_sheets(self):
+        log.explain("Crawling sheets")
         path = PurePath("./sheets")
         if not await self.crawl(path):
             return
@@ -63,6 +72,25 @@ class InfomarkCrawler(HttpCrawler):
             tasks.append(self._download_file(path, entry, etag, mtime))
 
         await self.gather(tasks)
+
+    async def _authenticate(self) -> None:
+        username, password = await self._auth.credentials()
+        login_data = {
+            "email": username,
+            "plain_password": password 
+        }
+        url = urljoin(self._url, "api/v1/auth/sessions")
+        log.print(f"url: {url}")
+
+        # Start session to handle cookies
+        async with self.session.post(url, json=login_data) as resp:
+            # Print response
+            print("Status Code:", resp.status)
+            print("Response Body:", await resp.text())
+            if resp.status != 200:
+                self._auth.invalidate_credentials()
+        #async with self.session.post(url, json=login_data) as request:
+
 
     async def _download_file(
         self,
@@ -98,4 +126,10 @@ class InfomarkCrawler(HttpCrawler):
             sink.done()
 
             self._add_etag_to_report(path, resp.headers.get("ETag"))
+
+    async def _run(self) -> None:
+        log.explain("Running crawler")
+        auth_id = await self._current_auth_id()
+        await self.authenticate(auth_id)
+        await self._crawl_sheets()
 

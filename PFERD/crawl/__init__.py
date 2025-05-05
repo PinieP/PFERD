@@ -1,6 +1,8 @@
 from configparser import SectionProxy
 from typing import Callable, Dict
 
+from PFERD.crawl.infomark_crawler import InfomarkCrawler, InfomarkCrawlerSection
+
 from ..auth import Authenticator
 from ..config import Config
 from .crawler import Crawler, CrawlError, CrawlerSection  # noqa: F401
@@ -24,4 +26,6 @@ CRAWLERS: Dict[str, CrawlerConstructor] = {
         KitIliasWebCrawler(n, KitIliasWebCrawlerSection(s), c, a),
     "kit-ipd": lambda n, s, c, a:
         KitIpdCrawler(n, KitIpdCrawlerSection(s), c),
+    "infomark": lambda n, s, c, a:
+        InfomarkCrawler(n, InfomarkCrawlerSection(s), c, a)
 }
