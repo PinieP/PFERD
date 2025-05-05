@@ -1,11 +1,9 @@
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import PurePath
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
-import aiohttp
-from aiohttp.client import ClientSession
 
 from PFERD.auth.authenticator import Authenticator
 from PFERD.output_dir import FileSink
@@ -14,22 +12,48 @@ from ..logging import ProgressBar, log
 from ..config import Config
 from .http_crawler import HttpCrawler, HttpCrawlerSection
 
+@dataclass
+class InfomarkTarget:
+    course: int
+    path: str
+    kind: Optional[int]
+
+
 class InfomarkCrawlerSection(HttpCrawlerSection):
-    def target(self) -> str:
+    def target(self) -> InfomarkTarget:
         target = self.s.get("target")
         if not target:
             self.missing_value("target")
+        target = target.split("/")
 
-        if not target.startswith("https://"):
-            self.invalid_value("target", target, "Should be a URL")
+        if len(target) == 2:
+            kind = None
+        elif len(target) != 3 and target[2].isdigit:
+            kind = int(target[2])
+        else:
+            self.invalid_value("target", target, "Should be <course_id/<sheets | materials | materials/kind_id>")
 
-        return target
+        if not target[0].isdigit():
+            self.invalid_value("target", target, "Should be <course_id/<sheets | materials | materials/kind_id>")
+        if not target[1] in ["materials", "sheets"]:
+            self.invalid_value("target", target, "Should be <course_id/<sheets | materials | materials/kind_id>")
+
+        return InfomarkTarget(int(target[0]), target[1], kind)
+
+    def base_url(self) -> str:
+        base_url = self.s.get("base_url")
+        if not base_url:
+            self.missing_value("base_url")
+
+        return base_url
 
 
 @dataclass
 class InfomarkFile:
     name: str
     url: str
+    id: int
+    kind: Optional[int]
 
     def explain(self) -> None:
         log.explain(f"File {self.name!r} (href={self.url!r})")
@@ -44,30 +68,34 @@ class InfomarkCrawler(HttpCrawler):
             config: Config,
             authenticators: Dict[str, Authenticator]
     ):
+        target = section.target()
+
         super().__init__(name, section, config)
         self._auth = section.auth(authenticators)
-        self._url = section.target()
+        self._base_url = section.base_url()
+        self._target_url =  urljoin(section.base_url(), f"api/v1/courses/{target.course}/{target.path}")
+        self._filter_kind = target.kind
 
-    async def _fetch_sheets(self) -> List[InfomarkFile]:
-        url = self._url + "/api/v1/courses/1/sheets"
+    async def _fetch_index(self, url) -> List[InfomarkFile]:
         files = []
         async with self.session.get(url) as resp:
-            for sheet in await resp.json():
-                log.print(f"{sheet}")
-                files.append(InfomarkFile(f"{sheet["name"]}.zip", f"{url}/{sheet["id"]}/file"))
+            for entry in await resp.json():
+                kind = entry.get("kind")
+                if self._filter_kind == None or kind == self._filter_kind:
+                    id = entry["id"]
+                    log.print(f"{entry}")
+                    files.append(InfomarkFile(entry["name"], f"{url}/{id}/file", id, kind))
 
         return files
 
-    async def _crawl_sheets(self):
+    async def _crawl_entries(self):
         log.explain("Crawling sheets")
-        path = PurePath("./sheets")
+        path = PurePath(".")
         if not await self.crawl(path):
             return
 
         tasks = []
-        for entry in await self._fetch_sheets():
-            # do this here to at least be sequential and not parallel (rate limiting is hard, as the crawl
-            # abstraction does not hold for these requests)
+        for entry in await self._fetch_index(self._target_url):
             etag, mtime = await self._request_resource_version(entry.url)
             tasks.append(self._download_file(path, entry, etag, mtime))
 
@@ -79,7 +107,7 @@ class InfomarkCrawler(HttpCrawler):
             "email": username,
             "plain_password": password 
         }
-        url = urljoin(self._url, "api/v1/auth/sessions")
+        url = urljoin(self._base_url, "api/v1/auth/sessions")
         log.print(f"url: {url}")
 
         # Start session to handle cookies
@@ -131,5 +159,5 @@ class InfomarkCrawler(HttpCrawler):
         log.explain("Running crawler")
         auth_id = await self._current_auth_id()
         await self.authenticate(auth_id)
-        await self._crawl_sheets()
+        await self._crawl_entries()
 

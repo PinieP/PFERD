@@ -37,6 +37,9 @@ def load(
     section = parser["crawl:infomark"]
     load_crawler(args, section)
 
+    if args.base_url is not None:
+        section["base_url"] = args.base_url
+
     section["type"] = COMMAND_NAME
 
     load_common(section, args, parser)
