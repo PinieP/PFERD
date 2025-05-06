@@ -1,16 +1,16 @@
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import PurePath
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from urllib.parse import urljoin
-
 
 from PFERD.auth.authenticator import Authenticator
 from PFERD.output_dir import FileSink
-from ..logging import ProgressBar, log
 
 from ..config import Config
+from ..logging import ProgressBar, log
 from .http_crawler import HttpCrawler, HttpCrawlerSection
+
 
 @dataclass
 class InfomarkTarget:
@@ -24,21 +24,24 @@ class InfomarkCrawlerSection(HttpCrawlerSection):
         target = self.s.get("target")
         if not target:
             self.missing_value("target")
-        target = target.split("/")
+        target_parts = target.split("/")
 
-        if len(target) == 2:
+        if len(target_parts) == 2:
             kind = None
-        elif len(target) != 3 and target[2].isdigit:
-            kind = int(target[2])
+        elif len(target_parts) == 3 and target_parts[2].isdigit():
+            kind = int(target_parts[2])
         else:
-            self.invalid_value("target", target, "Should be <course_id/<sheets | materials | materials/kind_id>")
+            self.invalid_value("target", target_parts,
+                               "Should be <course_id/<sheets | materials | materials/kind_id>")
 
-        if not target[0].isdigit():
-            self.invalid_value("target", target, "Should be <course_id/<sheets | materials | materials/kind_id>")
-        if not target[1] in ["materials", "sheets"]:
-            self.invalid_value("target", target, "Should be <course_id/<sheets | materials | materials/kind_id>")
+        if not target_parts[0].isdigit():
+            self.invalid_value("target", target_parts,
+                               "Should be <course_id/<sheets | materials | materials/kind_id>")
+        if not target_parts[1] in ["materials", "sheets"]:
+            self.invalid_value("target", target_parts,
+                               "Should be <course_id/<sheets | materials | materials/kind_id>")
 
-        return InfomarkTarget(int(target[0]), target[1], kind)
+        return InfomarkTarget(int(target_parts[0]), target_parts[1], kind)
 
     def base_url(self) -> str:
         base_url = self.s.get("base_url")
@@ -73,22 +76,21 @@ class InfomarkCrawler(HttpCrawler):
         super().__init__(name, section, config)
         self._auth = section.auth(authenticators)
         self._base_url = section.base_url()
-        self._target_url =  urljoin(section.base_url(), f"api/v1/courses/{target.course}/{target.path}")
+        self._target_url = urljoin(section.base_url(), f"api/v1/courses/{target.course}/{target.path}")
         self._filter_kind = target.kind
 
-    async def _fetch_index(self, url) -> List[InfomarkFile]:
+    async def _fetch_index(self, url: str) -> List[InfomarkFile]:
         files = []
         async with self.session.get(url) as resp:
             for entry in await resp.json():
                 kind = entry.get("kind")
-                if self._filter_kind == None or kind == self._filter_kind:
+                if self._filter_kind is None or kind == self._filter_kind:
                     id = entry["id"]
-                    log.print(f"{entry}")
                     files.append(InfomarkFile(entry["name"], f"{url}/{id}/file", id, kind))
 
         return files
 
-    async def _crawl_entries(self):
+    async def _crawl_entries(self) -> None:
         log.explain("Crawling sheets")
         path = PurePath(".")
         if not await self.crawl(path):
@@ -105,20 +107,13 @@ class InfomarkCrawler(HttpCrawler):
         username, password = await self._auth.credentials()
         login_data = {
             "email": username,
-            "plain_password": password 
+            "plain_password": password
         }
         url = urljoin(self._base_url, "api/v1/auth/sessions")
-        log.print(f"url: {url}")
 
-        # Start session to handle cookies
         async with self.session.post(url, json=login_data) as resp:
-            # Print response
-            print("Status Code:", resp.status)
-            print("Response Body:", await resp.text())
             if resp.status != 200:
                 self._auth.invalidate_credentials()
-        #async with self.session.post(url, json=login_data) as request:
-
 
     async def _download_file(
         self,
@@ -142,6 +137,8 @@ class InfomarkCrawler(HttpCrawler):
         async with maybe_dl as (bar, sink):
             await self._stream_from_url(file.url, element_path, sink, bar)
 
+
+
     async def _stream_from_url(self, url: str, path: PurePath, sink: FileSink, bar: ProgressBar) -> None:
         async with self.session.get(url, allow_redirects=False) as resp:
             if resp.content_length:
@@ -160,4 +157,3 @@ class InfomarkCrawler(HttpCrawler):
         auth_id = await self._current_auth_id()
         await self.authenticate(auth_id)
         await self._crawl_entries()
-
