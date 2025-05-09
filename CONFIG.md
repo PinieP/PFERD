@@ -248,6 +248,18 @@ script once per day should be fine.
 - `http_timeout`: The timeout (in seconds) for all HTTP requests. (Default:
   `20.0`)
 
+### The `infomark` crawler
+
+This crawler crawls a infomark instance.
+
+- `base_url`: The URL where the infomark instance is located. (Required)
+- `target`: Specify which element to crawl (Required)
+    - `<course id>/<sheets | materials>`: Crawl all of sheets/materials.
+    - `<course id>/materials/<kind>`: Crawl materials with a specific kind.
+- `auth`: Name of auth section to use for login. (Required)
+- `http_timeout`: The timeout (in seconds) for all HTTP requests. (Default:
+  `20.0`)
+
 ## Authenticator types
 
 ### The `simple` authenticator
